@@ -41,7 +41,7 @@ jobs:
     runs-on: ${{ fromJSON(needs.prepare.outputs.runner_json) }}
     steps:
       - name: Run API Compatibility Check
-        uses: qualcomm/armor-checkers/.github/actions/api_checker@v1
+        uses: qualcomm-linux-stg/armor-checkers-staging/.github/actions/api_checker@armor-exception
         with:
           event-name:  ${{ needs.prepare.outputs.event_name }}
           head-sha:    ${{ needs.prepare.outputs.head_sha }}
