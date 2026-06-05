@@ -27,7 +27,7 @@ permissions:
 jobs:
   prepare:
     name: Prepare ARMOR Checkers Parameters
-    uses: qualcomm/armor-checkers/.github/workflows/set_checker_vars.yml@v1
+    uses: qualcomm-linux-stg/armor-checkers/.github/workflows/set_checker_vars.yml@armor-exception
     with:
       base-sha: ${{ inputs.base-sha }}
       head-sha: ${{ inputs.head-sha }}
