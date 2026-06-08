@@ -52,11 +52,23 @@ jobs:
             --field labels[]='armor-exception-approved'
 
           HEAD_SHA=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.sha')
+          echo "PR head SHA: ${HEAD_SHA}"
 
           RUN_ID=$(gh run list --repo ${REPOSITORY} \
             --json databaseId,headSha,conclusion \
             --jq ".[] | select(.headSha == \"${HEAD_SHA}\" and .conclusion == \"failure\") | .databaseId" \
             | head -1)
+
+          echo "Failed run ID: ${RUN_ID}"
+
+          if [[ -z "$RUN_ID" ]]; then
+            echo "No failed run found for SHA ${HEAD_SHA}. Listing recent runs for debug:"
+            gh run list --repo ${REPOSITORY} --limit 5 --json databaseId,headSha,conclusion,displayTitle
+            gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+              --method POST \
+              --field body=":warning: Exception label added by @${COMMENTER} but no failed workflow run found to re-run. Please re-run manually."
+            exit 1
+          fi
 
           gh run rerun ${RUN_ID} --failed --repo ${REPOSITORY}
 
