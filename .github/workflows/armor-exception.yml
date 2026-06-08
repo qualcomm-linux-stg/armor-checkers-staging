@@ -1,48 +1,73 @@
 name: ARMOR Exception Approval
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      commenter:
+        required: true
+        type: string
+        description: 'GitHub login of the user who commented'
+      pr-number:
+        required: true
+        type: number
+        description: 'PR number to add label to'
+      repository:
+        required: true
+        type: string
+        description: 'owner/repo of the calling repository'
 
 jobs:
   approve-exception:
-    if: |
-      github.event.issue.pull_request != null &&
-      github.event.comment.body == 'approve-breaking-change'
     runs-on: ubuntu-latest
     permissions:
       issues: write
       pull-requests: write
+      actions: write
     steps:
-      - name: Check admin permission, add label and re-run
+      - name: Check admin permission
+        id: permission-check
         env:
           GH_TOKEN: ${{ github.token }}
-          COMMENTER: ${{ github.event.comment.user.login }}
-          PR_NUMBER: ${{ github.event.issue.number }}
-          REPOSITORY: ${{ github.repository }}
+          COMMENTER: ${{ inputs.commenter }}
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          set -euo pipefail
+          PERMISSION=$(gh api repos/${REPOSITORY}/collaborators/${COMMENTER}/permission \
+            --jq '.permission' 2>/dev/null || echo "none")
+          echo "permission=$PERMISSION" >> "$GITHUB_OUTPUT"
+          echo "Commenter: $COMMENTER, Permission: $PERMISSION"
+
+      - name: Add label and re-run failed checks
+        if: steps.permission-check.outputs.permission == 'admin'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          COMMENTER: ${{ inputs.commenter }}
+          REPOSITORY: ${{ inputs.repository }}
         run: |
           set -euo pipefail
 
-          PERMISSION=$(gh api repos/${REPOSITORY}/collaborators/${COMMENTER}/permission \
-            --jq '.permission' 2>/dev/null || echo "none")
-
-          if [[ "$PERMISSION" != "admin" ]]; then
-            gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
-              --method POST \
-              --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Admin access on this repository is required."
-            exit 0
-          fi
-
-          # Add exception label
           gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/labels \
             --method POST \
             --field labels[]='armor-exception-approved'
 
-          # Find the failed workflow run for this PR's head SHA and re-run all failed jobs
           HEAD_SHA=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.sha')
+
           RUN_ID=$(gh run list --repo ${REPOSITORY} \
             --json databaseId,headSha,conclusion \
             --jq ".[] | select(.headSha == \"${HEAD_SHA}\" and .conclusion == \"failure\") | .databaseId" \
             | head -1)
 
           gh run rerun ${RUN_ID} --failed --repo ${REPOSITORY}
+
+      - name: Reject if not authorized
+        if: steps.permission-check.outputs.permission != 'admin'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          COMMENTER: ${{ inputs.commenter }}
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+            --method POST \
+            --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Admin access on this repository is required."

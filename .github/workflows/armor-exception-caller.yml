@@ -1,0 +1,20 @@
+name: ARMOR Exception Approval
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  approve-exception:
+    if: |
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == '/approve-breaking-change'
+    uses: qualcomm-linux-stg/armor-checkers-staging/.github/workflows/armor-exception.yml@armor-exception
+    with:
+      commenter: ${{ github.event.comment.user.login }}
+      pr-number: ${{ github.event.issue.number }}
+      repository: ${{ github.repository }}
+    permissions:
+      issues: write
+      pull-requests: write
+      actions: write
