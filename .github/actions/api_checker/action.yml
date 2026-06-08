@@ -376,21 +376,32 @@ runs:
           exception_approved="false"
           exception_approver=""
 
+          echo "[DEBUG] ARMOR status: failure, checking for exception approval"
+          echo "[DEBUG] PR number: ${pr_number}"
+
           if [[ -n "$pr_number" ]]; then
-            # Check if an admin commented approve-breaking-change
+            echo "[DEBUG] Fetching comments for PR #${pr_number}"
             comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-              --jq '.[] | select(.body == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
+              --jq '.[] | select(.body == "/approve-breaking-change") | .user.login' 2>/dev/null || echo "")
+            echo "[DEBUG] Users who commented /approve-breaking-change: '${comments}'"
 
             for commenter in $comments; do
+              echo "[DEBUG] Checking permission for: ${commenter}"
               perm=$(gh api repos/${{ github.repository }}/collaborators/${commenter}/permission \
                 --jq '.permission' 2>/dev/null || echo "none")
+              echo "[DEBUG] Permission for ${commenter}: ${perm}"
               if [[ "$perm" == "admin" ]]; then
                 exception_approved="true"
                 exception_approver="$commenter"
+                echo "[DEBUG] Exception approved by admin: ${commenter}"
                 break
               fi
             done
+          else
+            echo "[DEBUG] Not a PR event, skipping exception check"
           fi
+
+          echo "[DEBUG] exception_approved=${exception_approved}, exception_approver=${exception_approver}"
 
           if [[ "$exception_approved" == "true" ]]; then
             {

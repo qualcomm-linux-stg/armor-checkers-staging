@@ -32,10 +32,11 @@ jobs:
           REPOSITORY: ${{ inputs.repository }}
         run: |
           set -euo pipefail
+          echo "[DEBUG] Checking permission for: $COMMENTER on repo: $REPOSITORY"
           PERMISSION=$(gh api repos/${REPOSITORY}/collaborators/${COMMENTER}/permission \
             --jq '.permission' 2>/dev/null || echo "none")
+          echo "[DEBUG] Permission result: $PERMISSION"
           echo "permission=$PERMISSION" >> "$GITHUB_OUTPUT"
-          echo "Commenter: $COMMENTER, Permission: $PERMISSION"
 
       - name: Add label and re-run failed checks
         if: steps.permission-check.outputs.permission == 'admin'
@@ -46,31 +47,44 @@ jobs:
           REPOSITORY: ${{ inputs.repository }}
         run: |
           set -euo pipefail
+          echo "[DEBUG] Starting exception approval"
+          echo "[DEBUG] Commenter : $COMMENTER"
+          echo "[DEBUG] Repository: $REPOSITORY"
+          echo "[DEBUG] PR Number : $PR_NUMBER"
 
           gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/labels \
             --method POST \
             --field labels[]='armor-exception-approved'
+          echo "[DEBUG] Label 'armor-exception-approved' added"
 
           HEAD_SHA=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.sha')
-          echo "PR head SHA: ${HEAD_SHA}"
+          BRANCH=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.ref')
+          echo "[DEBUG] PR head SHA: ${HEAD_SHA}"
+          echo "[DEBUG] PR branch  : ${BRANCH}"
 
-          RUN_ID=$(gh run list --repo ${REPOSITORY} \
-            --json databaseId,headSha,conclusion \
-            --jq ".[] | select(.headSha == \"${HEAD_SHA}\" and .conclusion == \"failure\") | .databaseId" \
-            | head -1)
+          echo "[DEBUG] Recent runs on branch ${BRANCH}:"
+          gh run list --repo ${REPOSITORY} --branch ${BRANCH} --limit 10 \
+            --json databaseId,headSha,conclusion,displayTitle,status \
+            --jq '.[] | "[DEBUG] id=\(.databaseId) sha=\(.headSha) conclusion=\(.conclusion) status=\(.status) title=\(.displayTitle)"'
 
-          echo "Failed run ID: ${RUN_ID}"
+          RUN_IDS=$(gh api "repos/${REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&event=pull_request&status=failure" \
+            --jq '[.workflow_runs | group_by(.workflow_id)[] | sort_by(.updated_at) | reverse | .[0].id] | .[]')
 
-          if [[ -z "$RUN_ID" ]]; then
-            echo "No failed run found for SHA ${HEAD_SHA}. Listing recent runs for debug:"
-            gh run list --repo ${REPOSITORY} --limit 5 --json databaseId,headSha,conclusion,displayTitle
+          echo "[DEBUG] Latest failed run IDs (one per workflow): '${RUN_IDS}'"
+
+          if [[ -z "$RUN_IDS" ]]; then
+            echo "[DEBUG] No failed runs found for SHA ${HEAD_SHA}"
             gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
               --method POST \
-              --field body=":warning: Exception label added by @${COMMENTER} but no failed workflow run found to re-run. Please re-run manually."
+              --field body=":warning: Exception label added by @${COMMENTER} but no failed workflow runs found to re-run. Please re-run manually."
             exit 1
           fi
 
-          gh run rerun ${RUN_ID} --failed --repo ${REPOSITORY}
+          for RUN_ID in $RUN_IDS; do
+            echo "[DEBUG] Re-running failed jobs in run ${RUN_ID}"
+            gh run rerun ${RUN_ID} --failed --repo ${REPOSITORY}
+          done
+          echo "[DEBUG] All failed runs re-triggered successfully"
 
       - name: Reject if not authorized
         if: steps.permission-check.outputs.permission != 'admin'
