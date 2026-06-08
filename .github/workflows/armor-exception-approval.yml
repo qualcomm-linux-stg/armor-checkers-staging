@@ -55,11 +55,13 @@ jobs:
           # Get PR head SHA
           HEAD_SHA=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.sha')
 
-          # Mark armor check as passed via Checks API
-          gh api repos/${REPOSITORY}/check-runs \
-            --method POST \
-            --field name='Run API Check' \
-            --field head_sha="${HEAD_SHA}" \
+          # Find the existing failed check run ID and update to success
+          CHECK_RUN_ID=$(gh api repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs \
+            --jq '.check_runs[] | select(.name == "Run API Check") | .id' \
+            | head -1)
+
+          gh api repos/${REPOSITORY}/check-runs/${CHECK_RUN_ID} \
+            --method PATCH \
             --field status='completed' \
             --field conclusion='success' \
             --field output[title]='ARMOR Exception Approved' \
