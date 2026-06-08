@@ -54,8 +54,8 @@ runs:
 
         echo "[DEBUG] Checking for pre-approved exception on PR #${pr_number}"
         comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-          --jq '.[] | select(.body == "/approve-breaking-change") | .user.login' 2>/dev/null || echo "")
-        echo "[DEBUG] Users who commented /approve-breaking-change: '${comments}'"
+          --jq '.[] | select(.body == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
+        echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
 
         for commenter in $comments; do
           perm=$(gh api repos/${{ github.repository }}/collaborators/${commenter}/permission \
