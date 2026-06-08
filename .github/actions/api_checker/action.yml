@@ -74,20 +74,15 @@ runs:
     - name: Skip — exception already approved
       if: steps.exception-pre-check.outputs.approved == 'true'
       shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         approver="${{ steps.exception-pre-check.outputs.approver }}"
-        pr_number="${{ github.event.pull_request.number }}"
         {
           echo ""
           echo "### :white_check_mark: Exception Approved"
           echo "Backward-incompatible changes approved by @${approver}. Skipping ARMOR check."
         } >> "$GITHUB_STEP_SUMMARY"
-        gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-          --method POST \
-          --field body=":white_check_mark: Breaking change exception approved by @${approver}. ARMOR check passed."
+        echo "ARMOR check skipped: exception approved by @${approver}."
 
     - name: Checkout base commit
       if: steps.exception-pre-check.outputs.approved != 'true'
@@ -441,8 +436,8 @@ runs:
           if [[ -n "$pr_number" ]]; then
             echo "[DEBUG] Fetching comments for PR #${pr_number}"
             comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-              --jq '.[] | select(.body == "/approve-breaking-change") | .user.login' 2>/dev/null || echo "")
-            echo "[DEBUG] Users who commented /approve-breaking-change: '${comments}'"
+              --jq '.[] | select(.body == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
+            echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
 
             for commenter in $comments; do
               echo "[DEBUG] Checking permission for: ${commenter}"
@@ -466,12 +461,9 @@ runs:
             {
               echo ""
               echo "### :white_check_mark: Exception Approved"
-              echo "Backward-incompatible changes approved via exception."
+              echo "Backward-incompatible changes approved by @${exception_approver}."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "ARMOR check: incompatible changes present but exception approved."
-            gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-              --method POST \
-              --field body=":white_check_mark: Breaking change exception approved by @${exception_approver}. ARMOR check passed."
+            echo "ARMOR check: incompatible changes present but exception approved by @${exception_approver}."
           else
             echo "::error::ARMOR detected backward incompatible changes in public headers. Failing the check."
             exit 1
