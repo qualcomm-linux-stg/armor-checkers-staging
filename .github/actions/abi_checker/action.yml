@@ -34,7 +34,54 @@
   runs:
     using: "composite"
     steps:
+      - name: Check for pre-approved exception
+        id: exception-pre-check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_number="${{ github.event.pull_request.number }}"
+
+          if [[ -z "$pr_number" ]]; then
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "[DEBUG] Checking for pre-approved exception on PR #${pr_number}"
+          comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
+            --jq '.[] | select(.body == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
+          echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
+
+          for commenter in $comments; do
+            perm=$(gh api repos/${{ github.repository }}/collaborators/${commenter}/permission \
+              --jq '.permission' 2>/dev/null || echo "none")
+            echo "[DEBUG] Permission for ${commenter}: ${perm}"
+            if [[ "$perm" == "admin" ]]; then
+              echo "[DEBUG] Exception pre-approved by admin: ${commenter}"
+              echo "approved=true" >> "$GITHUB_OUTPUT"
+              echo "approver=${commenter}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "approved=false" >> "$GITHUB_OUTPUT"
+
+      - name: Skip — exception already approved
+        if: steps.exception-pre-check.outputs.approved == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          approver="${{ steps.exception-pre-check.outputs.approver }}"
+          {
+            echo ""
+            echo "### :white_check_mark: Exception Approved"
+            echo "Backward-incompatible changes approved by @${approver}. Skipping ABI check."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "ABI check skipped: exception approved by @${approver}."
+
       - name: Checkout base commit
+        if: steps.exception-pre-check.outputs.approved != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.base-sha }}
@@ -42,6 +89,7 @@
           fetch-depth: 0
 
       - name: Checkout head commit
+        if: steps.exception-pre-check.outputs.approved != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.head-sha }}
@@ -49,6 +97,7 @@
           fetch-depth: 0
 
       - name: Echo paths and SHAs
+        if: steps.exception-pre-check.outputs.approved != 'true'
         shell: bash
         env:
           EVENT_NAME: ${{ inputs.event-name }}
@@ -62,6 +111,7 @@
           echo "github-head path  : $GITHUB_WORKSPACE/head"
 
       - name: Detect code changes
+        if: steps.exception-pre-check.outputs.approved != 'true'
         id: cf
         shell: bash
         env:
@@ -461,7 +511,7 @@
           echo "s3_upload=$s3_ok" >> "$GITHUB_OUTPUT"
 
       - name: ABI check result
-        if: ${{ steps.run-abi.outputs.abi_result != '' }}
+        if: ${{ steps.exception-pre-check.outputs.approved != 'true' && steps.run-abi.outputs.abi_result != '' }}
         shell: bash
         run: |
           set -euo pipefail
