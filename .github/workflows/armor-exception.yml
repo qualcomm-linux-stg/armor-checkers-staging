@@ -1,0 +1,48 @@
+name: ARMOR Exception Approval
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  approve-exception:
+    if: |
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == 'approve-breaking-change'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check admin permission, add label and re-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          PERMISSION=$(gh api repos/${REPOSITORY}/collaborators/${COMMENTER}/permission \
+            --jq '.permission' 2>/dev/null || echo "none")
+
+          if [[ "$PERMISSION" != "admin" ]]; then
+            gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+              --method POST \
+              --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Admin access on this repository is required."
+            exit 0
+          fi
+
+          # Add exception label
+          gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/labels \
+            --method POST \
+            --field labels[]='armor-exception-approved'
+
+          # Find the failed workflow run for this PR's head SHA and re-run all failed jobs
+          HEAD_SHA=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.sha')
+          RUN_ID=$(gh run list --repo ${REPOSITORY} \
+            --json databaseId,headSha,conclusion \
+            --jq ".[] | select(.headSha == \"${HEAD_SHA}\" and .conclusion == \"failure\") | .databaseId" \
+            | head -1)
+
+          gh run rerun ${RUN_ID} --failed --repo ${REPOSITORY}

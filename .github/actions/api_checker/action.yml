@@ -351,7 +351,7 @@ runs:
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               body+=$'- '"$line"$'\n'
-            done < "$nbk"
+            done < "$nbk"armor
           fi
         fi
 
@@ -362,36 +362,46 @@ runs:
           echo "$delimiter"
         } >> "$GITHUB_OUTPUT"
 
-    - name: Check ARMOR exception label
-      id: exception-check
-      if: >-
-        ${{ steps.compatibility_status.outputs.res == 'failure' &&
-            (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') }}
-      shell: bash
-      env:
-        PR_NUMBER:          ${{ github.event.pull_request.number }}
-        GITHUB_REPOSITORY:  ${{ github.repository }}
-        GH_TOKEN:           ${{ github.token }}
-      run: |
-        set -euo pipefail
-        bash "${{ github.action_path }}/scripts/check_exception_issue.sh"
-
     - name: Fail if incompatible changes detected
       if: steps.intersection.outputs.has-intersection == 'true'
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         status="${{ steps.compatibility_status.outputs.res }}"
         printf '%s\n' "${{ steps.prepare-comment.outputs.body }}" >> "$GITHUB_STEP_SUMMARY"
         if [[ "$status" == "failure" ]]; then
-          exception="${{ steps.exception-check.outputs.exception_approved }}"
-          if [[ "$exception" == "true" ]]; then
+          pr_number="${{ github.event.pull_request.number }}"
+          exception_approved="false"
+          exception_approver=""
+
+          if [[ -n "$pr_number" ]]; then
+            # Check if an admin commented approve-breaking-change
+            comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
+              --jq '.[] | select(.body == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
+
+            for commenter in $comments; do
+              perm=$(gh api repos/${{ github.repository }}/collaborators/${commenter}/permission \
+                --jq '.permission' 2>/dev/null || echo "none")
+              if [[ "$perm" == "admin" ]]; then
+                exception_approved="true"
+                exception_approver="$commenter"
+                break
+              fi
+            done
+          fi
+
+          if [[ "$exception_approved" == "true" ]]; then
             {
               echo ""
               echo "### :white_check_mark: Exception Approved"
-              echo "Backward-incompatible changes approved via linked exception issue."
+              echo "Backward-incompatible changes approved via exception."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "ARMOR check: incompatible changes present but exception approved via linked issue."
+            echo "ARMOR check: incompatible changes present but exception approved."
+            gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
+              --method POST \
+              --field body=":white_check_mark: Breaking change exception approved by @${exception_approver}. ARMOR check passed."
           else
             echo "::error::ARMOR detected backward incompatible changes in public headers. Failing the check."
             exit 1

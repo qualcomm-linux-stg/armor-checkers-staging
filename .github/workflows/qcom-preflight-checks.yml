@@ -20,4 +20,3 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      pull-requests: read
