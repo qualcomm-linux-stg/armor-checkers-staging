@@ -38,7 +38,59 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Check for pre-approved exception
+      id: exception-pre-check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        pr_number="${{ github.event.pull_request.number }}"
+
+        if [[ -z "$pr_number" ]]; then
+          echo "approved=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "[DEBUG] Checking for pre-approved exception on PR #${pr_number}"
+        comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
+          --jq '.[] | select(.body == "/approve-breaking-change") | .user.login' 2>/dev/null || echo "")
+        echo "[DEBUG] Users who commented /approve-breaking-change: '${comments}'"
+
+        for commenter in $comments; do
+          perm=$(gh api repos/${{ github.repository }}/collaborators/${commenter}/permission \
+            --jq '.permission' 2>/dev/null || echo "none")
+          echo "[DEBUG] Permission for ${commenter}: ${perm}"
+          if [[ "$perm" == "admin" ]]; then
+            echo "[DEBUG] Exception pre-approved by admin: ${commenter}"
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "approver=${commenter}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+        done
+
+        echo "approved=false" >> "$GITHUB_OUTPUT"
+
+    - name: Skip — exception already approved
+      if: steps.exception-pre-check.outputs.approved == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        approver="${{ steps.exception-pre-check.outputs.approver }}"
+        pr_number="${{ github.event.pull_request.number }}"
+        {
+          echo ""
+          echo "### :white_check_mark: Exception Approved"
+          echo "Backward-incompatible changes approved by @${approver}. Skipping ARMOR check."
+        } >> "$GITHUB_STEP_SUMMARY"
+        gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
+          --method POST \
+          --field body=":white_check_mark: Breaking change exception approved by @${approver}. ARMOR check passed."
+
     - name: Checkout base commit
+      if: steps.exception-pre-check.outputs.approved != 'true'
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.base-sha }}
@@ -46,6 +98,7 @@ runs:
         fetch-depth: 0
 
     - name: Checkout head commit
+      if: steps.exception-pre-check.outputs.approved != 'true'
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.head-sha }}
@@ -53,6 +106,7 @@ runs:
         fetch-depth: 0
 
     - name: Checkout ARMOR tool repository
+      if: steps.exception-pre-check.outputs.approved != 'true'
       uses: actions/checkout@v4
       with:
         repository: qualcomm/armor
@@ -61,6 +115,7 @@ runs:
         fetch-depth: 0
 
     - name: Echo paths and SHAs
+      if: steps.exception-pre-check.outputs.approved != 'true'
       shell: bash
       env:
         EVENT_NAME: ${{ inputs.event-name }}
@@ -74,6 +129,7 @@ runs:
         echo "github-head path  : \"$GITHUB_WORKSPACE/head\""
 
     - name: Verify gcc and Docker installation
+      if: steps.exception-pre-check.outputs.approved != 'true'
       shell: bash
       run: |
         set -e
@@ -81,6 +137,7 @@ runs:
         docker --version || { echo "docker missing"; exit 1; }
 
     - name: Install yq
+      if: steps.exception-pre-check.outputs.approved != 'true'
       id: install-yq
       shell: bash
       run: |
@@ -127,6 +184,7 @@ runs:
         fi
 
     - name: Get changed files
+      if: steps.exception-pre-check.outputs.approved != 'true'
       id: changed-files
       shell: bash
       env:
@@ -292,6 +350,7 @@ runs:
 
 
     - name: Compute compatibility status
+      if: steps.exception-pre-check.outputs.approved != 'true'
       id: compatibility_status
       shell: bash
       run: |
