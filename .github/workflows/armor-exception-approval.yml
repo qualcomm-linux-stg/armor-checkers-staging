@@ -1,0 +1,85 @@
+name: ARMOR Exception Approval
+
+on:
+  workflow_call:
+    inputs:
+      commenter:
+        required: true
+        type: string
+        description: 'GitHub login of the user who commented'
+      pr-number:
+        required: true
+        type: number
+        description: 'PR number to add label to'
+      repository:
+        required: true
+        type: string
+        description: 'owner/repo of the calling repository'
+
+jobs:
+  approve-exception:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Check admin permission
+        id: permission-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENTER: ${{ inputs.commenter }}
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          set -euo pipefail
+          PERMISSION=$(gh api repos/${REPOSITORY}/collaborators/${COMMENTER}/permission \
+            --jq '.permission' 2>/dev/null || echo "none")
+          echo "permission=$PERMISSION" >> "$GITHUB_OUTPUT"
+          echo "Commenter: $COMMENTER, Permission: $PERMISSION"
+
+      - name: Add label and approve if authorized
+        if: steps.permission-check.outputs.permission == 'admin'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          COMMENTER: ${{ inputs.commenter }}
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          set -euo pipefail
+
+          # Add label
+          gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/labels \
+            --method POST \
+            --field labels[]='armor-exception-approved'
+
+          # Get PR head SHA
+          HEAD_SHA=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.sha')
+
+          # Find the existing failed check run ID and update to success
+          CHECK_RUN_ID=$(gh api repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs \
+            --jq '.check_runs[] | select(.name == "Run API Check") | .id' \
+            | head -1)
+
+          gh api repos/${REPOSITORY}/check-runs/${CHECK_RUN_ID} \
+            --method PATCH \
+            --field status='completed' \
+            --field conclusion='success' \
+            --field output[title]='ARMOR Exception Approved' \
+            --field output[summary]="Breaking change exception approved by @${COMMENTER}."
+
+          # Post approval comment
+          gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+            --method POST \
+            --field body=":white_check_mark: Breaking change exception approved by @${COMMENTER}. The ARMOR check has been marked as passed."
+
+      - name: Reject if not authorized
+        if: steps.permission-check.outputs.permission != 'admin'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          COMMENTER: ${{ inputs.commenter }}
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+            --method POST \
+            --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Admin access on this repository is required."
