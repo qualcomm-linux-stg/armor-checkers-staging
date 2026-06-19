@@ -53,10 +53,18 @@
             --jq '.[] | select((.body | gsub("^\\s+|\\s+$"; "")) == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
           echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
 
+          APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
+            --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+
+          if [[ -z "$APPROVERS" ]]; then
+            echo "[DEBUG] .github/armor-approvers not found or empty — no exception possible"
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "[DEBUG] Approvers list fetched"
+
           for commenter in $comments; do
             echo "[DEBUG] Checking if ${commenter} is in armor-approvers list"
-            APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
-              --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
             if echo "$APPROVERS" | grep -qx "${commenter}"; then
               echo "[DEBUG] Exception pre-approved by: ${commenter}"
               echo "approved=true" >> "$GITHUB_OUTPUT"
