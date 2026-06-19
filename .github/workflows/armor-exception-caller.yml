@@ -40,9 +40,7 @@ jobs:
 
   approve-exception:
     needs: load-approvers
-    if: >-
-      github.event.issue.pull_request &&
-      contains(github.event.comment.body, 'approve-breaking-change')
+    if: ${{ needs.load-approvers.result == 'success' }}
     uses: qualcomm-linux-stg/armor-checkers-staging/.github/workflows/armor-exception.yml@armor-exception
     with:
       commenter: ${{ github.event.comment.user.login }}

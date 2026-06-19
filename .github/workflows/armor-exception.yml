@@ -122,4 +122,4 @@ jobs:
         run: |
           gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
             --method POST \
-            --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Admin access on this repository is required."
+            --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Your username is not in the \`.github/armor-approvers\` list."
