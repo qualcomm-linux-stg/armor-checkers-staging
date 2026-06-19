@@ -11,7 +11,35 @@ permissions:
   contents: read
 
 jobs:
+  load-approvers:
+    if: >-
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, 'approve-breaking-change')
+    runs-on: ubuntu-latest
+    outputs:
+      approvers: ${{ steps.read.outputs.approvers }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/armor-approvers
+          sparse-checkout-cone-mode: false
+
+      - name: Read approvers file
+        id: read
+        run: |
+          if [[ -f ".github/armor-approvers" ]]; then
+            {
+              echo "approvers<<EOF"
+              cat .github/armor-approvers
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "approvers=" >> "$GITHUB_OUTPUT"
+          fi
+
   approve-exception:
+    needs: load-approvers
     if: >-
       github.event.issue.pull_request &&
       contains(github.event.comment.body, 'approve-breaking-change')
@@ -20,6 +48,7 @@ jobs:
       commenter: ${{ github.event.comment.user.login }}
       pr-number: ${{ github.event.issue.number }}
       repository: ${{ github.repository }}
+      approvers: ${{ needs.load-approvers.outputs.approvers }}
     secrets:
       CALLER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     permissions:

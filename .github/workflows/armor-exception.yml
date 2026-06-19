@@ -15,10 +15,11 @@ on:
         required: true
         type: string
         description: 'owner/repo of the calling repository'
-    secrets:
-      CALLER_TOKEN:
+      approvers:
         required: false
-        description: 'Token from calling repo for cross-repo access'
+        type: string
+        default: ''
+        description: 'Newline-separated list of GitHub usernames authorized to approve'
 
 jobs:
   approve-exception:
@@ -35,28 +36,25 @@ jobs:
           COMMENTER: ${{ inputs.commenter }}
           REPOSITORY: ${{ inputs.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
+          APPROVERS_INPUT: ${{ inputs.approvers }}
         run: |
           set -euo pipefail
-          echo "[DEBUG] Checking if $COMMENTER is in armor-approvers list for repo: $REPOSITORY"
+          echo "[DEBUG] Checking if $COMMENTER is in approvers list for repo: $REPOSITORY"
 
-          RAW=$(gh api repos/${REPOSITORY}/contents/.github/armor-approvers 2>&1 || echo "API_ERROR")
-          echo "[DEBUG] Raw API response: ${RAW}"
-          APPROVERS=$(echo "$RAW" | jq -r '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
-          echo "[DEBUG] Decoded approvers: '${APPROVERS}'"
-          echo "[DEBUG] Hex dump: $(echo -n "${APPROVERS}" | xxd | head -5)"
+          APPROVERS="$APPROVERS_INPUT"
 
           if [[ -z "$APPROVERS" ]]; then
-            echo "[DEBUG] .github/armor-approvers not found or empty in ${REPOSITORY} — skipping exception check"
+            echo "[DEBUG] No approvers list provided — skipping exception check"
             echo "approved=false" >> "$GITHUB_OUTPUT"
             echo "file-missing=true" >> "$GITHUB_OUTPUT"
             gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
               --method POST \
-              --field body=":information_source: \`.github/armor-approvers\` file not found in this repository. Exception approval is not configured. To enable it, create \`.github/armor-approvers\` with one GitHub username per line." 2>/dev/null || true
+              --field body=":information_source: No approvers configured. To enable exception approval, add \`approvers\` input to your \`armor-exception.yml\` workflow." 2>/dev/null || true
             exit 0
           fi
           echo "file-missing=false" >> "$GITHUB_OUTPUT"
 
-          echo "[DEBUG] Approvers list: ${APPROVERS}"
+          echo "[DEBUG] Approvers: ${APPROVERS}"
 
           if echo "$APPROVERS" | grep -qx "${COMMENTER}"; then
             echo "[DEBUG] ${COMMENTER} found in approvers list"
