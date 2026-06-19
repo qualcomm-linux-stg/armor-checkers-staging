@@ -42,6 +42,8 @@ jobs:
           RAW=$(gh api repos/${REPOSITORY}/contents/.github/armor-approvers 2>&1 || echo "API_ERROR")
           echo "[DEBUG] Raw API response: ${RAW}"
           APPROVERS=$(echo "$RAW" | jq -r '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
+          echo "[DEBUG] Decoded approvers: '${APPROVERS}'"
+          echo "[DEBUG] Hex dump: $(echo -n "${APPROVERS}" | xxd | head -5)"
 
           if [[ -z "$APPROVERS" ]]; then
             echo "[DEBUG] .github/armor-approvers not found or empty in ${REPOSITORY} — skipping exception check"
