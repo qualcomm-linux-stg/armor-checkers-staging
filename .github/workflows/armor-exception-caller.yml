@@ -49,8 +49,6 @@ jobs:
       pr-number: ${{ github.event.issue.number }}
       repository: ${{ github.repository }}
       approvers: ${{ needs.load-approvers.outputs.approvers }}
-    secrets:
-      CALLER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       issues: write
       pull-requests: write

@@ -32,7 +32,7 @@ jobs:
       - name: Check approver permission
         id: permission-check
         env:
-          GH_TOKEN: ${{ secrets.CALLER_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           COMMENTER: ${{ inputs.commenter }}
           REPOSITORY: ${{ inputs.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
@@ -67,7 +67,7 @@ jobs:
       - name: Add label and re-run failed checks
         if: steps.permission-check.outputs.approved == 'true'
         env:
-          GH_TOKEN: ${{ secrets.CALLER_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr-number }}
           COMMENTER: ${{ inputs.commenter }}
           REPOSITORY: ${{ inputs.repository }}
@@ -115,7 +115,7 @@ jobs:
       - name: Reject if not authorized
         if: steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.file-missing != 'true'
         env:
-          GH_TOKEN: ${{ secrets.CALLER_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr-number }}
           COMMENTER: ${{ inputs.commenter }}
           REPOSITORY: ${{ inputs.repository }}
