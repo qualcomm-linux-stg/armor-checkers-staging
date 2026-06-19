@@ -38,10 +38,12 @@ jobs:
             --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 
           if [[ -z "$APPROVERS" ]]; then
-            echo "[DEBUG] .github/armor-approvers not found or empty in ${REPOSITORY}"
+            echo "[DEBUG] .github/armor-approvers not found or empty in ${REPOSITORY} — skipping exception check"
             echo "approved=false" >> "$GITHUB_OUTPUT"
+            echo "file-missing=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "file-missing=false" >> "$GITHUB_OUTPUT"
 
           echo "[DEBUG] Approvers list: ${APPROVERS}"
 
@@ -102,7 +104,7 @@ jobs:
           echo "[DEBUG] All failed runs re-triggered successfully"
 
       - name: Reject if not authorized
-        if: steps.permission-check.outputs.approved != 'true'
+        if: steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.file-missing != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr-number }}
