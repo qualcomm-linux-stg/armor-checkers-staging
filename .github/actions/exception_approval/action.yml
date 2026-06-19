@@ -1,0 +1,114 @@
+name: "ARMOR Exception Approval"
+description: "Approve a breaking change exception for ARMOR checks"
+
+inputs:
+  commenter:
+    description: 'GitHub login of the user who commented'
+    required: true
+  pr-number:
+    description: 'PR number to add label to'
+    required: true
+  repository:
+    description: 'owner/repo of the calling repository'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check approver permission
+      id: permission-check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        COMMENTER: ${{ inputs.commenter }}
+        REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+        echo "[DEBUG] Checking if $COMMENTER is in armor-approvers for repo: $REPOSITORY"
+
+        APPROVERS=$(gh api repos/${REPOSITORY}/contents/.github/armor-approvers \
+          --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
+
+        if [[ -z "$APPROVERS" ]]; then
+          echo "[DEBUG] .github/armor-approvers not found or empty — skipping exception check"
+          echo "approved=false" >> "$GITHUB_OUTPUT"
+          echo "file-missing=true" >> "$GITHUB_OUTPUT"
+          gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+            --method POST \
+            --field body=":information_source: \`.github/armor-approvers\` not found. Create it with one GitHub username per line to enable exception approval." 2>/dev/null || true
+          exit 0
+        fi
+        echo "file-missing=false" >> "$GITHUB_OUTPUT"
+
+        echo "[DEBUG] Approvers: ${APPROVERS}"
+
+        if echo "$APPROVERS" | grep -qx "${COMMENTER}"; then
+          echo "[DEBUG] ${COMMENTER} found in approvers list"
+          echo "approved=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "[DEBUG] ${COMMENTER} not found in approvers list"
+          echo "approved=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Add label and re-run failed checks
+      if: steps.permission-check.outputs.approved == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        COMMENTER: ${{ inputs.commenter }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        set -euo pipefail
+        echo "[DEBUG] Starting exception approval"
+        echo "[DEBUG] Commenter : $COMMENTER"
+        echo "[DEBUG] Repository: $REPOSITORY"
+        echo "[DEBUG] PR Number : $PR_NUMBER"
+
+        gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/labels \
+          --method POST \
+          --field labels[]='armor-exception-approved'
+        echo "[DEBUG] Label 'armor-exception-approved' added"
+
+        HEAD_SHA=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.sha')
+        BRANCH=$(gh api repos/${REPOSITORY}/pulls/${PR_NUMBER} --jq '.head.ref')
+        echo "[DEBUG] PR head SHA: ${HEAD_SHA}"
+        echo "[DEBUG] PR branch  : ${BRANCH}"
+
+        echo "[DEBUG] Recent runs on branch ${BRANCH}:"
+        gh run list --repo ${REPOSITORY} --branch ${BRANCH} --limit 10 \
+          --json databaseId,headSha,conclusion,displayTitle,status \
+          --jq '.[] | "[DEBUG] id=\(.databaseId) sha=\(.headSha) conclusion=\(.conclusion) status=\(.status) title=\(.displayTitle)"'
+
+        RUN_IDS=$(gh api "repos/${REPOSITORY}/actions/runs?head_sha=${HEAD_SHA}&event=pull_request&status=failure" \
+          --jq '[.workflow_runs | group_by(.workflow_id)[] | sort_by(.updated_at) | reverse | .[0].id] | .[]')
+
+        echo "[DEBUG] Latest failed run IDs (one per workflow): '${RUN_IDS}'"
+
+        if [[ -z "$RUN_IDS" ]]; then
+          echo "[DEBUG] No failed runs found for SHA ${HEAD_SHA}"
+          gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+            --method POST \
+            --field body=":warning: Exception label added by @${COMMENTER} but no failed workflow runs found to re-run. Please re-run manually."
+          exit 1
+        fi
+
+        for RUN_ID in $RUN_IDS; do
+          echo "[DEBUG] Re-running failed jobs in run ${RUN_ID}"
+          gh run rerun ${RUN_ID} --failed --repo ${REPOSITORY}
+        done
+        echo "[DEBUG] All failed runs re-triggered successfully"
+
+    - name: Reject if not authorized
+      if: steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.file-missing != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        COMMENTER: ${{ inputs.commenter }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+          --method POST \
+          --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Your username is not in the \`.github/armor-approvers\` list."
