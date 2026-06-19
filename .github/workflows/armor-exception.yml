@@ -16,8 +16,8 @@ on:
         type: string
         description: 'owner/repo of the calling repository'
     secrets:
-      CALLER_TOKEN:
-        required: false
+      GITHUB_TOKEN:
+        required: true
         description: 'Token from calling repo for cross-repo access'
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       - name: Check approver permission
         id: permission-check
         env:
-          GH_TOKEN: ${{ secrets.CALLER_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENTER: ${{ inputs.commenter }}
           REPOSITORY: ${{ inputs.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
@@ -69,7 +69,7 @@ jobs:
       - name: Add label and re-run failed checks
         if: steps.permission-check.outputs.approved == 'true'
         env:
-          GH_TOKEN: ${{ secrets.CALLER_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr-number }}
           COMMENTER: ${{ inputs.commenter }}
           REPOSITORY: ${{ inputs.repository }}
@@ -117,7 +117,7 @@ jobs:
       - name: Reject if not authorized
         if: steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.file-missing != 'true'
         env:
-          GH_TOKEN: ${{ secrets.CALLER_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr-number }}
           COMMENTER: ${{ inputs.commenter }}
           REPOSITORY: ${{ inputs.repository }}
