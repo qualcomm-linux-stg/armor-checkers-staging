@@ -20,7 +20,8 @@ jobs:
       commenter: ${{ github.event.comment.user.login }}
       pr-number: ${{ github.event.issue.number }}
       repository: ${{ github.repository }}
-    secrets: inherit
+    secrets:
+      CALLER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       issues: write
       pull-requests: write
