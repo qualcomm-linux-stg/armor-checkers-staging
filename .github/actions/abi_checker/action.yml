@@ -54,11 +54,11 @@
           echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
 
           for commenter in $comments; do
-            perm=$(gh api repos/${{ github.repository }}/collaborators/${commenter}/permission \
-              --jq '.permission' 2>/dev/null || echo "none")
-            echo "[DEBUG] Permission for ${commenter}: ${perm}"
-            if [[ "$perm" == "admin" ]]; then
-              echo "[DEBUG] Exception pre-approved by admin: ${commenter}"
+            echo "[DEBUG] Checking if ${commenter} is in armor-approvers list"
+            APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
+              --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+            if echo "$APPROVERS" | grep -qx "${commenter}"; then
+              echo "[DEBUG] Exception pre-approved by: ${commenter}"
               echo "approved=true" >> "$GITHUB_OUTPUT"
               echo "approver=${commenter}" >> "$GITHUB_OUTPUT"
               exit 0

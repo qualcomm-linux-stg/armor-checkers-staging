@@ -24,7 +24,7 @@ jobs:
       pull-requests: write
       actions: write
     steps:
-      - name: Check admin permission
+      - name: Check approver permission
         id: permission-check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -32,14 +32,29 @@ jobs:
           REPOSITORY: ${{ inputs.repository }}
         run: |
           set -euo pipefail
-          echo "[DEBUG] Checking permission for: $COMMENTER on repo: $REPOSITORY"
-          PERMISSION=$(gh api repos/${REPOSITORY}/collaborators/${COMMENTER}/permission \
-            --jq '.permission' 2>/dev/null || echo "none")
-          echo "[DEBUG] Permission result: $PERMISSION"
-          echo "permission=$PERMISSION" >> "$GITHUB_OUTPUT"
+          echo "[DEBUG] Checking if $COMMENTER is in armor-approvers list for repo: $REPOSITORY"
+
+          APPROVERS=$(gh api repos/${REPOSITORY}/contents/.github/armor-approvers \
+            --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+
+          if [[ -z "$APPROVERS" ]]; then
+            echo "[DEBUG] .github/armor-approvers not found or empty in ${REPOSITORY}"
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "[DEBUG] Approvers list: ${APPROVERS}"
+
+          if echo "$APPROVERS" | grep -qx "${COMMENTER}"; then
+            echo "[DEBUG] ${COMMENTER} found in approvers list"
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "[DEBUG] ${COMMENTER} not found in approvers list"
+            echo "approved=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Add label and re-run failed checks
-        if: steps.permission-check.outputs.permission == 'admin'
+        if: steps.permission-check.outputs.approved == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr-number }}
@@ -87,7 +102,7 @@ jobs:
           echo "[DEBUG] All failed runs re-triggered successfully"
 
       - name: Reject if not authorized
-        if: steps.permission-check.outputs.permission != 'admin'
+        if: steps.permission-check.outputs.approved != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr-number }}

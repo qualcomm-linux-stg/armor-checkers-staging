@@ -12,7 +12,7 @@ permissions:
 jobs:
   approve-exception:
     if: >-
-      github.event.issue.pull_request != null &&
+      github.event.issue.pull_request &&
       contains(github.event.comment.body, 'approve-breaking-change')
     uses: qualcomm-linux-stg/armor-checkers-staging/.github/workflows/armor-exception.yml@armor-exception
     with:
