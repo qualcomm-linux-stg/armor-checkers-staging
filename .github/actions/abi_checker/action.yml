@@ -54,7 +54,7 @@
           echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
 
           APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
-            --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+            --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
 
           if [[ -z "$APPROVERS" ]]; then
             echo "[DEBUG] .github/armor-approvers not found or empty — no exception possible"
