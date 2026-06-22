@@ -23,3 +23,4 @@ jobs:
           commenter: ${{ github.event.comment.user.login }}
           pr-number: ${{ github.event.issue.number }}
           repository: ${{ github.repository }}
+          approver-team: 'audio-api-owners'
