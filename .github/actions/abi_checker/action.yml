@@ -30,6 +30,10 @@
     build-script:
       description: "Build script to build the project"
       required: true
+    approver-team:
+      description: "GitHub team slug for exception approval (e.g. audio-api-owners)"
+      required: false
+      default: ""
 
   runs:
     using: "composite"
@@ -54,11 +58,10 @@
           echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
 
           ORG=$(echo "${{ github.repository }}" | cut -d'/' -f1)
-          APPROVER_TEAM=$(gh api repos/${{ github.repository }}/contents/.github/armor-approver-team \
-            --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null | tr -d '[:space:]' || echo "")
+          APPROVER_TEAM="${{ inputs.approver-team }}"
 
           if [[ -z "$APPROVER_TEAM" ]]; then
-            echo "[DEBUG] .github/armor-approver-team not found — no exception possible"
+            echo "[DEBUG] No approver-team configured — no exception possible"
             echo "approved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
