@@ -30,10 +30,6 @@
     build-script:
       description: "Build script to build the project"
       required: true
-    approver-team:
-      description: "GitHub team slug for exception approval (e.g. audio-api-owners)"
-      required: false
-      default: ""
 
   runs:
     using: "composite"
@@ -57,21 +53,19 @@
             --jq '.[] | select((.body | gsub("^\\s+|\\s+$"; "")) == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
           echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
 
-          ORG=$(echo "${{ github.repository }}" | cut -d'/' -f1)
-          APPROVER_TEAM="${{ inputs.approver-team }}"
+          APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
+            --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
 
-          if [[ -z "$APPROVER_TEAM" ]]; then
-            echo "[DEBUG] No approver-team configured — no exception possible"
+          if [[ -z "$APPROVERS" ]]; then
+            echo "[DEBUG] .github/armor-approvers not found or empty — no exception possible"
             echo "approved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "[DEBUG] Approver team: ${APPROVER_TEAM}"
+          echo "[DEBUG] Approvers list fetched"
 
           for commenter in $comments; do
-            echo "[DEBUG] Checking if ${commenter} is member of ${ORG}/${APPROVER_TEAM}"
-            STATE=$(gh api orgs/${ORG}/teams/${APPROVER_TEAM}/memberships/${commenter} \
-              --jq '.state' 2>/dev/null || echo "")
-            if [[ "$STATE" == "active" ]]; then
+            echo "[DEBUG] Checking if ${commenter} is in armor-approvers list"
+            if echo "$APPROVERS" | grep -qx "${commenter}"; then
               echo "[DEBUG] Exception pre-approved by: ${commenter}"
               echo "approved=true" >> "$GITHUB_OUTPUT"
               echo "approver=${commenter}" >> "$GITHUB_OUTPUT"

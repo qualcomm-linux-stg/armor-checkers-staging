@@ -11,14 +11,6 @@ inputs:
   repository:
     description: 'owner/repo of the calling repository'
     required: true
-  approver-team:
-    description: 'GitHub team slug to check membership against (e.g. audio-api-owners)'
-    required: false
-    default: ''
-  token:
-    description: 'Token with read:org scope for team membership check'
-    required: false
-    default: ${{ github.token }}
 
 runs:
   using: "composite"
@@ -27,49 +19,36 @@ runs:
       id: permission-check
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ github.token }}
         COMMENTER: ${{ inputs.commenter }}
         REPOSITORY: ${{ inputs.repository }}
         PR_NUMBER: ${{ inputs.pr-number }}
-        APPROVER_TEAM: ${{ inputs.approver-team }}
       run: |
         set -euo pipefail
-        echo "[DEBUG] Checking if $COMMENTER is authorized for repo: $REPOSITORY"
+        echo "[DEBUG] Checking if $COMMENTER is in armor-approvers for repo: $REPOSITORY"
 
-        if [[ -n "$APPROVER_TEAM" ]]; then
-          ORG=$(echo "$REPOSITORY" | cut -d'/' -f1)
-          echo "[DEBUG] Checking team membership: ${ORG}/${APPROVER_TEAM}"
-          STATE=$(gh api orgs/${ORG}/teams/${APPROVER_TEAM}/memberships/${COMMENTER} \
-            --jq '.state' 2>/dev/null || echo "")
-          echo "[DEBUG] Team membership state: '${STATE}'"
+        APPROVERS=$(gh api repos/${REPOSITORY}/contents/.github/armor-approvers \
+          --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
 
-          if [[ "$STATE" == "active" ]]; then
-            echo "[DEBUG] ${COMMENTER} is an active member of ${APPROVER_TEAM}"
-            echo "approved=true" >> "$GITHUB_OUTPUT"
-            echo "team-missing=false" >> "$GITHUB_OUTPUT"
-          else
-            STATUS=$(gh api orgs/${ORG}/teams/${APPROVER_TEAM} --jq '.id' 2>/dev/null || echo "")
-            if [[ -z "$STATUS" ]]; then
-              echo "[DEBUG] Team ${APPROVER_TEAM} not found in org ${ORG}"
-              echo "approved=false" >> "$GITHUB_OUTPUT"
-              echo "team-missing=true" >> "$GITHUB_OUTPUT"
-              gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
-                --method POST \
-                --field body=":information_source: Team \`${APPROVER_TEAM}\` not found in org \`${ORG}\`. Create the team and add approvers to enable exception approval." 2>/dev/null || true
-            else
-              echo "[DEBUG] ${COMMENTER} is not a member of ${APPROVER_TEAM}"
-              echo "approved=false" >> "$GITHUB_OUTPUT"
-              echo "team-missing=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-        else
-
-          echo "[DEBUG] No approver-team provided — skipping exception check"
+        if [[ -z "$APPROVERS" ]]; then
+          echo "[DEBUG] .github/armor-approvers not found or empty — skipping exception check"
           echo "approved=false" >> "$GITHUB_OUTPUT"
-          echo "team-missing=true" >> "$GITHUB_OUTPUT"
+          echo "file-missing=true" >> "$GITHUB_OUTPUT"
           gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
             --method POST \
-            --field body=":information_source: No \`approver-team\` configured. Pass the team slug as input to enable exception approval." 2>/dev/null || true
+            --field body=":information_source: \`.github/armor-approvers\` not found. Create it with one GitHub username per line to enable exception approval." 2>/dev/null || true
+          exit 0
+        fi
+        echo "file-missing=false" >> "$GITHUB_OUTPUT"
+
+        echo "[DEBUG] Approvers: ${APPROVERS}"
+
+        if echo "$APPROVERS" | grep -qx "${COMMENTER}"; then
+          echo "[DEBUG] ${COMMENTER} found in approvers list"
+          echo "approved=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "[DEBUG] ${COMMENTER} not found in approvers list"
+          echo "approved=false" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Add label and re-run failed checks
@@ -122,15 +101,14 @@ runs:
         echo "[DEBUG] All failed runs re-triggered successfully"
 
     - name: Reject if not authorized
-      if: steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.team-missing != 'true'
+      if: steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.file-missing != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         PR_NUMBER: ${{ inputs.pr-number }}
         COMMENTER: ${{ inputs.commenter }}
         REPOSITORY: ${{ inputs.repository }}
-        APPROVER_TEAM: ${{ inputs.approver-team }}
       run: |
         gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
           --method POST \
-          --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. You must be a member of the \`${APPROVER_TEAM}\` team."
+          --field body=":no_entry: @${COMMENTER} is not authorized to approve breaking changes. Your username is not in the \`.github/armor-approvers\` list."
