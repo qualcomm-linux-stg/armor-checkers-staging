@@ -37,6 +37,8 @@ on:
         value: ${{ jobs.setup.outputs.build_script }}
       runner_json:
         value: ${{ jobs.setup.outputs.runner_json }}
+      full_blocking:
+        value: ${{ jobs.setup.outputs.full_blocking }}
 
 jobs:
   setup:
@@ -47,6 +49,7 @@ jobs:
       repo: ${{ steps.vars.outputs.repo }}
       build_script: ${{ steps.vars.outputs.build_script }}
       runner_json: ${{ steps.vars.outputs.runner_json }}
+      full_blocking: ${{ steps.vars.outputs.full_blocking }}
       head_sha: ${{ steps.vars.outputs.head_sha }}
       base_sha: ${{ steps.vars.outputs.base_sha }}
       branch_name: ${{ steps.vars.outputs.branch_name }}
@@ -90,6 +93,11 @@ jobs:
                 fromJSON(inputs.armor-checker-options)['runs-on'] != null &&
                 toJSON(fromJSON(inputs.armor-checker-options)['runs-on']) || '"ubuntu-latest"' }}
 
+          # Optional "Full-blocking" flag (true/True or false/False); defaults to false
+          FULL_BLOCKING: >-
+            ${{ inputs.armor-checker-options != '' &&
+                fromJSON(inputs.armor-checker-options)['Full-blocking'] || 'false' }}
+
         run: |
           set -euo pipefail
 
@@ -97,6 +105,13 @@ jobs:
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           echo "build_script=$BUILD_SCRIPT" >> "$GITHUB_OUTPUT"
+
+          # Normalize to lowercase "true"/"false" so consumers can compare reliably
+          if [[ "${FULL_BLOCKING,,}" == "true" ]]; then
+            echo "full_blocking=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full_blocking=false" >> "$GITHUB_OUTPUT"
+          fi
 
           {
             echo "runner_json<<EOF"

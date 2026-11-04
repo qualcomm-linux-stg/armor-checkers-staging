@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   approve-exception:
+    # Cheap prefilter only; the action applies the exact-match rule
     if: >-
       github.event.issue.pull_request &&
       contains(github.event.comment.body, 'approve-breaking-change')

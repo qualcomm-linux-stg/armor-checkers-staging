@@ -15,8 +15,26 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Check comment is an approval request
+      id: keyword
+      shell: bash
+      env:
+        COMMENT_BODY: ${{ github.event.comment.body }}
+      run: |
+        set -euo pipefail
+        # Same rule as the checkers: the whole comment, trimmed, equals the keyword
+        body="${COMMENT_BODY#"${COMMENT_BODY%%[![:space:]]*}"}"
+        body="${body%"${body##*[![:space:]]}"}"
+        if [[ "$body" == "approve-breaking-change" ]]; then
+          echo "match=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "match=false" >> "$GITHUB_OUTPUT"
+          echo "Comment is not exactly 'approve-breaking-change'; ignoring."
+        fi
+
     - name: Check approver permission
       id: permission-check
+      if: steps.keyword.outputs.match == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -76,6 +94,18 @@ runs:
         echo "[DEBUG] PR head SHA: ${HEAD_SHA}"
         echo "[DEBUG] PR branch  : ${BRANCH}"
 
+        # Record the approval against this exact commit. The checkers only accept a marker
+        # posted by github-actions[bot] whose sha equals the head commit they are checking,
+        # so a new push needs a new approval. Post before re-running so the re-run sees it.
+        marker="<!-- armor-exception-approved sha=${HEAD_SHA} approver=${COMMENTER} -->"
+        printf -v approval_body '%s\n%s' \
+          ":white_check_mark: ARMOR exception approved by @${COMMENTER} for commit \`${HEAD_SHA}\`. A new push requires a new approval." \
+          "$marker"
+        gh api repos/${REPOSITORY}/issues/${PR_NUMBER}/comments \
+          --method POST \
+          -f body="$approval_body" >/dev/null
+        echo "[DEBUG] Approval recorded for ${HEAD_SHA}"
+
         echo "[DEBUG] Recent runs on branch ${BRANCH}:"
         gh run list --repo ${REPOSITORY} --branch ${BRANCH} --limit 10 \
           --json databaseId,headSha,conclusion,displayTitle,status \
@@ -101,7 +131,7 @@ runs:
         echo "[DEBUG] All failed runs re-triggered successfully"
 
     - name: Reject if not authorized
-      if: steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.file-missing != 'true'
+      if: steps.keyword.outputs.match == 'true' && steps.permission-check.outputs.approved != 'true' && steps.permission-check.outputs.file-missing != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}

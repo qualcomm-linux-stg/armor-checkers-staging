@@ -39,6 +39,7 @@
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           pr_number="${{ github.event.pull_request.number }}"
@@ -48,10 +49,12 @@
             exit 0
           fi
 
-          echo "[DEBUG] Checking for pre-approved exception on PR #${pr_number}"
-          comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-            --jq '.[] | select((.body | gsub("^\\s+|\\s+$"; "")) == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
-          echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
+          echo "[DEBUG] Checking for pre-approved exception on PR #${pr_number} (head ${PR_HEAD_SHA})"
+          # Approvals are recorded by the exception workflow as a bot comment bound to a head SHA
+          markers=$(gh api --paginate repos/${{ github.repository }}/issues/${pr_number}/comments \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .body | capture("<!-- armor-exception-approved sha=(?<sha>[0-9a-f]{40}) approver=(?<approver>[A-Za-z0-9_-]+) -->") | "\(.sha) \(.approver)"' 2>/dev/null || echo "")
+          comments=$(awk -v sha="$PR_HEAD_SHA" '$1 == sha { print $2 }' <<<"$markers")
+          echo "[DEBUG] Approvers recorded for this head commit: '${comments}'"
 
           APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
             --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
@@ -150,6 +153,13 @@
             echo "code=false" >> "$GITHUB_OUTPUT"
             echo "No matching code files found."
           fi
+
+      - name: Stop early if exception approved
+        if: ${{ steps.exception-pre-check.outputs.approved == 'true' }}
+        shell: bash
+        run: |
+          echo "Exception approved; skipping ABI check."
+          exit 0
 
       - name: Stop early if no code changes
         if: ${{ steps.cf.outputs.code != 'true' }}

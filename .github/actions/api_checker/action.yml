@@ -34,6 +34,10 @@ inputs:
     description: "Git ref to checkout for ARMOR tool repo"
     required: false
     default: "main"
+  full-blocking:
+    description: "Set to 'true' when Full-blocking is requested in armor-checker-options"
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -43,6 +47,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         set -euo pipefail
         pr_number="${{ github.event.pull_request.number }}"
@@ -52,10 +57,12 @@ runs:
           exit 0
         fi
 
-        echo "[DEBUG] Checking for pre-approved exception on PR #${pr_number}"
-        comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-          --jq '.[] | select((.body | gsub("^\\s+|\\s+$"; "")) == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
-        echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
+        echo "[DEBUG] Checking for pre-approved exception on PR #${pr_number} (head ${PR_HEAD_SHA})"
+        # Approvals are recorded by the exception workflow as a bot comment bound to a head SHA
+        markers=$(gh api --paginate repos/${{ github.repository }}/issues/${pr_number}/comments \
+          --jq '.[] | select(.user.login == "github-actions[bot]") | .body | capture("<!-- armor-exception-approved sha=(?<sha>[0-9a-f]{40}) approver=(?<approver>[A-Za-z0-9_-]+) -->") | "\(.sha) \(.approver)"' 2>/dev/null || echo "")
+        comments=$(awk -v sha="$PR_HEAD_SHA" '$1 == sha { print $2 }' <<<"$markers")
+        echo "[DEBUG] Approvers recorded for this head commit: '${comments}'"
 
         APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
           --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
@@ -429,23 +436,36 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        FULL_BLOCKING: ${{ inputs.full-blocking }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         set -euo pipefail
         status="${{ steps.compatibility_status.outputs.res }}"
         printf '%s\n' "${{ steps.prepare-comment.outputs.body }}" >> "$GITHUB_STEP_SUMMARY"
+
+        # Full-blocking: any public header change fails the step, compatible or not
         if [[ "$status" == "failure" ]]; then
+          fail_reason="ARMOR detected backward incompatible changes in public headers."
+          approved_what="Backward-incompatible changes"
+        elif [[ "$FULL_BLOCKING" == "true" ]]; then
+          fail_reason="Full-blocking is enabled: changes to public headers require approval (ARMOR status: ${status})."
+          approved_what="Public header changes"
+        fi
+
+        if [[ "$status" == "failure" || "$FULL_BLOCKING" == "true" ]]; then
           pr_number="${{ github.event.pull_request.number }}"
           exception_approved="false"
           exception_approver=""
 
-          echo "[DEBUG] ARMOR status: failure, checking for exception approval"
+          echo "[DEBUG] ARMOR status: ${status}, full-blocking: ${FULL_BLOCKING}, checking for exception approval"
           echo "[DEBUG] PR number: ${pr_number}"
 
           if [[ -n "$pr_number" ]]; then
             echo "[DEBUG] Fetching comments for PR #${pr_number}"
-            comments=$(gh api repos/${{ github.repository }}/issues/${pr_number}/comments \
-              --jq '.[] | select((.body | gsub("^\\s+|\\s+$"; "")) == "approve-breaking-change") | .user.login' 2>/dev/null || echo "")
-            echo "[DEBUG] Users who commented approve-breaking-change: '${comments}'"
+            markers=$(gh api --paginate repos/${{ github.repository }}/issues/${pr_number}/comments \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | .body | capture("<!-- armor-exception-approved sha=(?<sha>[0-9a-f]{40}) approver=(?<approver>[A-Za-z0-9_-]+) -->") | "\(.sha) \(.approver)"' 2>/dev/null || echo "")
+            comments=$(awk -v sha="$PR_HEAD_SHA" '$1 == sha { print $2 }' <<<"$markers")
+            echo "[DEBUG] Approvers recorded for head ${PR_HEAD_SHA}: '${comments}'"
 
             APPROVERS=$(gh api repos/${{ github.repository }}/contents/.github/armor-approvers \
               --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || echo "")
@@ -470,11 +490,11 @@ runs:
             {
               echo ""
               echo "### :white_check_mark: Exception Approved"
-              echo "Backward-incompatible changes approved by @${exception_approver}."
+              echo "${approved_what} approved by @${exception_approver}."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "ARMOR check: incompatible changes present but exception approved by @${exception_approver}."
+            echo "ARMOR check: ${approved_what,,} present but exception approved by @${exception_approver}."
           else
-            echo "::error::ARMOR detected backward incompatible changes in public headers. Failing the check."
+            echo "::error::${fail_reason} Failing the check."
             exit 1
           fi
         else
