@@ -86,21 +86,7 @@ runs:
 
         echo "approved=false" >> "$GITHUB_OUTPUT"
 
-    - name: Skip — exception already approved
-      if: steps.exception-pre-check.outputs.approved == 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        approver="${{ steps.exception-pre-check.outputs.approver }}"
-        {
-          echo ""
-          echo "### :white_check_mark: Exception Approved"
-          echo "Backward-incompatible changes approved by @${approver}. Skipping ARMOR check."
-        } >> "$GITHUB_STEP_SUMMARY"
-        echo "ARMOR check skipped: exception approved by @${approver}."
-
     - name: Checkout base commit
-      if: steps.exception-pre-check.outputs.approved != 'true'
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.base-sha }}
@@ -108,7 +94,6 @@ runs:
         fetch-depth: 0
 
     - name: Checkout head commit
-      if: steps.exception-pre-check.outputs.approved != 'true'
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.head-sha }}
@@ -116,7 +101,6 @@ runs:
         fetch-depth: 0
 
     - name: Checkout ARMOR tool repository
-      if: steps.exception-pre-check.outputs.approved != 'true'
       uses: actions/checkout@v4
       with:
         repository: qualcomm/armor
@@ -125,7 +109,6 @@ runs:
         fetch-depth: 0
 
     - name: Echo paths and SHAs
-      if: steps.exception-pre-check.outputs.approved != 'true'
       shell: bash
       env:
         EVENT_NAME: ${{ inputs.event-name }}
@@ -139,7 +122,6 @@ runs:
         echo "github-head path  : \"$GITHUB_WORKSPACE/head\""
 
     - name: Verify gcc and Docker installation
-      if: steps.exception-pre-check.outputs.approved != 'true'
       shell: bash
       run: |
         set -e
@@ -147,7 +129,6 @@ runs:
         docker --version || { echo "docker missing"; exit 1; }
 
     - name: Install yq
-      if: steps.exception-pre-check.outputs.approved != 'true'
       id: install-yq
       shell: bash
       run: |
@@ -194,7 +175,6 @@ runs:
         fi
 
     - name: Get changed files
-      if: steps.exception-pre-check.outputs.approved != 'true'
       id: changed-files
       shell: bash
       env:
@@ -322,6 +302,8 @@ runs:
         # Provide PR number only for PR events; empty otherwise
         PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Validated approver from the exception pre-check; empty when there is none
+        APPROVER: ${{ steps.exception-pre-check.outputs.approver }}
       run: |
         set -euo pipefail
         ARMOR_BINS_PATH="$(cat "$GITHUB_WORKSPACE/.armor_bins_path")"
@@ -337,6 +319,7 @@ runs:
           -e GITHUB_EVENT="$GITHUB_EVENT_NAME" \
           -e PR_NUMBER="$PR_NUMBER" \
           -e workflow_url="$WORKFLOW_URL" \
+          -e APPROVER="$APPROVER" \
           -e ACTION_DIR="$ACTION_DIR" \
           -e GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
           -e ARMOR_BINS_PATH="$ARMOR_BINS_PATH" \
@@ -358,9 +341,15 @@ runs:
         OUT_ROOT="$(cat "$GITHUB_WORKSPACE/.armor_out_root")"
         echo "out-root=$OUT_ROOT" >> "$GITHUB_OUTPUT"
 
+    - name: Upload all armor outputs (artifact)
+      if: steps.intersection.outputs.has-intersection == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: apichecker-reports
+        path: ${{ steps.run-armor.outputs.out-root }}
+        if-no-files-found: warn
 
     - name: Compute compatibility status
-      if: steps.exception-pre-check.outputs.approved != 'true'
       id: compatibility_status
       shell: bash
       run: |
@@ -373,6 +362,43 @@ runs:
         fi
         echo "Overall status: $STATUS"
         echo "res=$STATUS" >> "$GITHUB_OUTPUT"
+
+    - name: Upload folder to S3
+      if: steps.intersection.outputs.has-intersection == 'true'
+      shell: bash
+      env:
+        OUT_ROOT: ${{ steps.run-armor.outputs.out-root }}
+        SERVER_URL: ${{ github.server_url }}
+        REPOSITORY: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        set -e
+        FOLDER="$OUT_ROOT"
+        BUCKET="s3://qli-stg-armor-gh-artifacts"
+        YYYY="$(date -u +'%Y')"
+        MM="$(date -u +'%m')"
+        DD="$(date -u +'%d')"
+        HH="$(date -u +'%H')"
+        HOST="$(printf '%s' "$SERVER_URL" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##')"
+        PREFIX="${YYYY}/${MM}/${DD}/${HH}/${HOST}/${REPOSITORY}/${GITHUB_REF_NAME}/${RUN_ID}/files"
+        echo "Uploading artifacts to Destination: ${BUCKET}/${PREFIX}"
+        set +e
+        ERR_FILE="$(mktemp)"
+        aws s3 cp "$FOLDER" "${BUCKET}/${PREFIX}" \
+          --recursive \
+          --content-type "application/octet-stream" \
+          --only-show-errors \
+          2> "$ERR_FILE"
+        rc=$?
+        set -e
+        if [[ ${rc} -eq 0 ]]; then
+          echo "S3 upload succeeded."
+        else
+          reason="$(cat "$ERR_FILE")"
+          echo "::error :: S3 upload FAILED (rc=${rc})."
+          echo "::error :: Reason: ${reason:-No error output captured}"
+        fi
+        rm -f "$ERR_FILE"
 
     - name: Prepare ARMOR summary
       if: steps.intersection.outputs.has-intersection == 'true'
@@ -438,6 +464,8 @@ runs:
         GH_TOKEN: ${{ github.token }}
         FULL_BLOCKING: ${{ inputs.full-blocking }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PRE_APPROVED: ${{ steps.exception-pre-check.outputs.approved }}
+        PRE_APPROVER: ${{ steps.exception-pre-check.outputs.approver }}
       run: |
         set -euo pipefail
         status="${{ steps.compatibility_status.outputs.res }}"
@@ -456,11 +484,17 @@ runs:
           pr_number="${{ github.event.pull_request.number }}"
           exception_approved="false"
           exception_approver=""
+          if [[ "$PRE_APPROVED" == "true" ]]; then
+            exception_approved="true"
+            exception_approver="$PRE_APPROVER"
+          fi
 
           echo "[DEBUG] ARMOR status: ${status}, full-blocking: ${FULL_BLOCKING}, checking for exception approval"
           echo "[DEBUG] PR number: ${pr_number}"
 
-          if [[ -n "$pr_number" ]]; then
+          if [[ "$exception_approved" == "true" ]]; then
+            echo "[DEBUG] Exception already approved by ${exception_approver} (checked before the run)"
+          elif [[ -n "$pr_number" ]]; then
             echo "[DEBUG] Fetching comments for PR #${pr_number}"
             markers=$(gh api --paginate repos/${{ github.repository }}/issues/${pr_number}/comments \
               --jq '.[] | select(.user.login == "github-actions[bot]") | .body | capture("<!-- armor-exception-approved sha=(?<sha>[0-9a-f]{40}) approver=(?<approver>[A-Za-z0-9_-]+) -->") | "\(.sha) \(.approver)"' 2>/dev/null || echo "")

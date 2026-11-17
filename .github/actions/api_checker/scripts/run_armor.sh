@@ -11,7 +11,7 @@ set -euo pipefail
 #
 # Environment (optional):
 #   PROJECT, BRANCH, GITHUB_EVENT, PR_NUMBER, HEADER_DIR, INCLUDE_PATHS, MACRO_FLAGS,
-#   REPORT_FORMAT=json, LOG_LEVEL, DUMP_AST_DIFF, ARMOR_CMD, HEAD_SHA, BASE_SHA
+#   REPORT_FORMAT=json, LOG_LEVEL, DUMP_AST_DIFF, ARMOR_CMD, HEAD_SHA, BASE_SHA, APPROVER
 # ==============================================================================
 
 log()  { printf "\033[1;34m[INFO]\033[0m %s\n" "$*" >&2; }
@@ -37,6 +37,7 @@ MACRO_FLAGS="${MACRO_FLAGS:-}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
 HEAD_SHA="${HEAD_SHA:-$(git -C "$HEAD_PATH" rev-parse HEAD 2>/dev/null || echo unknown)}"
 BASE_SHA="${BASE_SHA:-}"
+APPROVER="${APPROVER:-}"
 
 ARMOR_CMD="${ARMOR_CMD:-${ARMOR_BINS_PATH:-armor}}"
 command -v "$ARMOR_CMD" >/dev/null || [[ -x "$ARMOR_CMD" ]] || die "armor CLI not found"
@@ -130,9 +131,10 @@ jq -n \
   --arg timestamp "$ts" \
   --arg head_sha "$HEAD_SHA" \
   --arg base_sha "$BASE_SHA" \
+  --arg approver "$APPROVER" \
   --arg artifacts "$workflow_url#artifacts" \
   --argjson headers "$headers_array" \
-  '{project_url:$project_url, branch:$branch, github_event:$event, pr_number:$pr, timestamp:$timestamp, head_sha:$head_sha, base_sha:$base_sha, artifacts:$artifacts, headers:$headers}' \
+  '{project_url:$project_url, branch:$branch, github_event:$event, pr_number:$pr, timestamp:$timestamp, head_sha:$head_sha, base_sha:$base_sha, approver:(if $approver == "" then null else $approver end), artifacts:$artifacts, headers:$headers}' \
   > "${OUT_ROOT}/metadata.json"
 
 overall_status="success"

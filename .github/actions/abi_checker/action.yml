@@ -78,21 +78,7 @@
 
           echo "approved=false" >> "$GITHUB_OUTPUT"
 
-      - name: Skip — exception already approved
-        if: steps.exception-pre-check.outputs.approved == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          approver="${{ steps.exception-pre-check.outputs.approver }}"
-          {
-            echo ""
-            echo "### :white_check_mark: Exception Approved"
-            echo "Backward-incompatible changes approved by @${approver}. Skipping ABI check."
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "ABI check skipped: exception approved by @${approver}."
-
       - name: Checkout base commit
-        if: steps.exception-pre-check.outputs.approved != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.base-sha }}
@@ -100,7 +86,6 @@
           fetch-depth: 0
 
       - name: Checkout head commit
-        if: steps.exception-pre-check.outputs.approved != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.head-sha }}
@@ -108,7 +93,6 @@
           fetch-depth: 0
 
       - name: Echo paths and SHAs
-        if: steps.exception-pre-check.outputs.approved != 'true'
         shell: bash
         env:
           EVENT_NAME: ${{ inputs.event-name }}
@@ -122,7 +106,6 @@
           echo "github-head path  : $GITHUB_WORKSPACE/head"
 
       - name: Detect code changes
-        if: steps.exception-pre-check.outputs.approved != 'true'
         id: cf
         shell: bash
         env:
@@ -153,13 +136,6 @@
             echo "code=false" >> "$GITHUB_OUTPUT"
             echo "No matching code files found."
           fi
-
-      - name: Stop early if exception approved
-        if: ${{ steps.exception-pre-check.outputs.approved == 'true' }}
-        shell: bash
-        run: |
-          echo "Exception approved; skipping ABI check."
-          exit 0
 
       - name: Stop early if no code changes
         if: ${{ steps.cf.outputs.code != 'true' }}
@@ -395,6 +371,8 @@
           HEAD_SHA:     ${{ inputs.head-sha }}
           BASE_SHA:     ${{ inputs.base-sha }}
           CHANGED_FILES: ${{ steps.cf.outputs.changed_files }}
+          # Validated approver from the exception pre-check; empty when there is none
+          APPROVER:     ${{ steps.exception-pre-check.outputs.approver }}
         run: |
           set -euo pipefail
           mkdir -p "$REPORTS_DIR"
@@ -411,6 +389,9 @@
             CHANGED_FILES_JSON="[]"
           fi
 
+          # null when there is no approver, otherwise a JSON string
+          APPROVER_JSON=$(jq -n --arg approver "$APPROVER" 'if $approver == "" then null else $approver end')
+
           cat > "$REPORTS_DIR/abi_metadata.json" <<EOF
           {
             "project_url": "$PROJECT_URL",
@@ -420,6 +401,7 @@
             "timestamp": "$TIMESTAMP",
             "head_sha": "$HEAD_SHA",
             "base_sha": "$BASE_SHA",
+            "approver": $APPROVER_JSON,
             "artifacts": "$ARTIFACTS_URL",
             "changed_files": $CHANGED_FILES_JSON,
             "binaries": []
@@ -529,8 +511,11 @@
           echo "s3_upload=$s3_ok" >> "$GITHUB_OUTPUT"
 
       - name: ABI check result
-        if: ${{ steps.exception-pre-check.outputs.approved != 'true' && steps.run-abi.outputs.abi_result != '' }}
+        if: ${{ steps.run-abi.outputs.abi_result != '' }}
         shell: bash
+        env:
+          PRE_APPROVED: ${{ steps.exception-pre-check.outputs.approved }}
+          PRE_APPROVER: ${{ steps.exception-pre-check.outputs.approver }}
         run: |
           set -euo pipefail
           status="${{ steps.run-abi.outputs.abi_result }}"
@@ -540,6 +525,16 @@
           errors="${{ steps.run-abi.outputs.abi_errors || 0 }}"
 
           if [[ "$status" == "fail" ]]; then
+            # An approval covers incompatible changes, not errors from the ABI tooling itself
+            if [[ "$PRE_APPROVED" == "true" && "$errors" == "0" ]]; then
+              {
+                echo ""
+                echo "### :white_check_mark: Exception Approved"
+                echo "Backward-incompatible changes approved by @${PRE_APPROVER}."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "ABI check FAILED (compatible=${ok}, ABI changed=${changed}, incompatible=${incompatible}, errors=${errors}) but exception approved by @${PRE_APPROVER}."
+              exit 0
+            fi
             echo "ABI check FAILED (compatible=${ok}, ABI changed=${changed}, incompatible=${incompatible}, errors=${errors})"
             exit 1
           else
